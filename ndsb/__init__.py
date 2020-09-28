@@ -33,7 +33,6 @@ class Data:
 
             fh.seek(0)
             fh.truncate()
-            print(pickles)
             pickle.dump(pickles, fh)
 
             fh.flush()
@@ -52,7 +51,6 @@ class ArtifactJson(dict):
         self._instance = instance
 
     def __call__(self, dict):
-        print("CALLING ATTR", self._instance, dict)
         self._instance._json.update(copy.deepcopy(dict))
 
 class Artifact:
