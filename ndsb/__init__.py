@@ -9,10 +9,25 @@ import uuid
 import tarfile
 import json
 import shutil
-
+import datetime
 
 __version__ = "0.1.0a0"
 
+class BeamError(Exception):
+    pass
+
+class RestrictAccess:
+    def __init__(self):
+        self._private = False
+        self._whitelist = set()
+
+    def make_private(self):
+        self._private = True
+
+    def grant_access(self, whitelist):
+        if not self._private:
+            raise RuntimeError("Cannot grant access on public object, make private first.")
+        self._whitelist.update(whitelist)
 
 class Data:
     def __init__(self):
@@ -46,36 +61,79 @@ class Data:
         with artifact.open("err.txt") as fh:
             fh.write(f"The Data class {self.__class__.__name__} did not overwrite the `pack` method.")
 
+
 class ArtifactJson(dict):
-    def __init__(self, instance):
-        self._instance = instance
-
     def __call__(self, dict):
-        self._instance._json.update(copy.deepcopy(dict))
+        self.update(copy.deepcopy(dict))
 
-class Artifact:
 
+class Artifact(RestrictAccess):
     def __init__(self, path):
+        super().__init__()
         p = pathlib.Path(path)
         p.mkdir(exist_ok=False, parents=True)
         self.path = p
         self._json = {}
-        self.json = ArtifactJson(self)
+        self.json = ArtifactJson()
 
     def open(self, file, mode="x", timeout=10):
         return portalocker.Lock(str(self.path / file), mode, timeout=timeout)
 
     def finalize(self):
+        self.json["public_access"] = not self._private
+        if self._private and self._whitelist:
+            self.json["access_list"] = list(self.whitelist)
         with open(self.path / "artifact.json", "w") as f:
             json.dump(self.json, f)
 
 
-class Beam:
+class Beam(RestrictAccess):
     def __init__(self, archive):
+        super().__init__()
         self.archive = archive
 
-    def beam(self, host, key):
-        pass
+    def fire(self, host, launch_codes):
+        import requests
+
+        response = requests.post(host, **self.initiate_firing_protocol(launch_codes))
+
+        if response.status_code == 200:
+            os.remove(self.archive)
+        else:
+            raise BeamError(f"Could not beam '{self.archive}': Error [{response.status_code}] {response.text}")
+
+    def initiate_firing_protocol(self, key):
+        from requests_toolbelt.multipart.encoder import MultipartEncoder
+        mp_encoder = MultipartEncoder(
+            fields={
+                'meta': json.dumps(self.tune_frequencies()),
+                'archive': ("archive.tar.gz", self.charge_beam(), "application/gzip"),
+            }
+        )
+
+        return {
+            "headers": {
+                "Authorization": f"Bearer {key}",
+                "Content-Type": mp_encoder.content_type
+            },
+            "data": mp_encoder
+        }
+
+    def tune_frequencies(self):
+        """
+            Get the metadata
+        """
+        tuning_data = {
+            "transmitted_on": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "transmitted_by": os.getenv("NDSB_TRANSMITTER_NAME", "Unknown"),
+            "public_access": not self._private,
+        }
+        if self._private and self._whitelist:
+            tuning_data["access_list"] = list(self.whitelist)
+        return tuning_data
+
+    def charge_beam(self):
+        return open(self.archive, "rb")
 
 
 def thaw(file="artifacts.pickle", timeout=10):
