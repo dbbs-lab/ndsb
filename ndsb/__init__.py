@@ -92,15 +92,18 @@ class Beam(RestrictAccess):
         super().__init__()
         self.archive = archive
 
-    def fire(self, host, launch_codes):
+    def fire(self, host, launch_codes, debug=False):
         import requests
 
         response = requests.post(host, **self.initiate_firing_protocol(launch_codes))
 
         if response.status_code == 200:
-            os.remove(self.archive)
+            if not debug:
+                os.remove(self.archive)
         else:
             raise BeamError(f"Could not beam '{self.archive}': Error [{response.status_code}] {response.text}")
+
+        return json.loads(response.text)
 
     def initiate_firing_protocol(self, key):
         from requests_toolbelt.multipart.encoder import MultipartEncoder
