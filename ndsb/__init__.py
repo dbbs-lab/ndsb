@@ -11,7 +11,7 @@ import json
 import shutil
 import datetime
 
-__version__ = "0.1.0a0"
+__version__ = "1.0.0"
 
 class BeamError(Exception):
     pass
@@ -31,7 +31,7 @@ class RestrictAccess:
 
 class Data:
     def __init__(self):
-        pass
+        self.artifact = None
 
     def freeze(self, file="artifacts.pickle", timeout=10):
         with portalocker.Lock(file, "ab+", timeout=timeout) as fh:
@@ -61,6 +61,19 @@ class Data:
         with artifact.open("err.txt") as fh:
             fh.write(f"The Data class {self.__class__.__name__} did not overwrite the `pack` method.")
 
+    def view(self):
+        return self.to_markdown("*Override your `Data` class' `view` method for a better description.*")
+
+    def to_markdown(self, content=""):
+        id_str = f"<sub>id:{self.artifact.id}</sub>" if self.artifact else ""
+        return (
+            f"\n## {self.__class__.__name__} artifact{id_str}\n\n"
+            + content
+            + ("\n\n" if bool(self.artifact) else "")
+            + (f"\n```json\n{json.dumps(self.artifact.json, indent=2)}\n```" if bool(self.artifact) else "")
+        )
+
+
 
 class ArtifactJson(dict):
     def __call__(self, dict):
@@ -75,6 +88,10 @@ class Artifact(RestrictAccess):
         self.path = p
         self._json = {}
         self.json = ArtifactJson()
+
+    @property
+    def id(self):
+        return self.path.parts[-1]
 
     def open(self, file, mode="x", timeout=10):
         return portalocker.Lock(str(self.path / file), mode, timeout=timeout)
@@ -164,6 +181,7 @@ def artificer(data, path=None, meta=None):
         artifact = Artifact(p / str(i))
         datum.pack(artifact)
         artifact.finalize()
+        datum.artifact = artifact
     with tarfile.open(p.parents[0] / (id + ".tar.gz"), "w:gz") as tar:
         tar.add(p, arcname=id)
     shutil.rmtree(p)
