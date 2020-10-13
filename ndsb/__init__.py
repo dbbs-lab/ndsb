@@ -11,9 +11,12 @@ import json
 import shutil
 import datetime
 
-__version__ = "1.0.1"
+__version__ = "2.0.0"
 
 class BeamError(Exception):
+    pass
+
+class IntruderAlert(Exception):
     pass
 
 class RestrictAccess:
@@ -105,14 +108,20 @@ class Artifact(RestrictAccess):
 
 
 class Beam(RestrictAccess):
-    def __init__(self, archive):
+    def __init__(self, data, archive):
         super().__init__()
         self.archive = archive
+        self.data = data
 
-    def fire(self, host, launch_codes, debug=False):
+    def fire(self, host, launch_codes, debug=False, fire_at_strangers=False):
         import requests
 
-        response = requests.post(host, **self.initiate_firing_protocol(launch_codes))
+        endpoint = os.path.join(host, "beam", "receive") + "/"
+        try:
+            response = requests.post(endpoint, **self.initiate_firing_protocol(launch_codes), verify=not fire_at_strangers)
+        except requests.exceptions.SSLError as e:
+            if "CERTIFICATE_VERIFY_FAILED" in str(e):
+                raise IntruderAlert("SSL Certificate could not be verified. If you know this is OK, use `beam.fire(..., fire_at_strangers=True)`")
 
         if response.status_code == 200:
             if not debug:
@@ -120,7 +129,22 @@ class Beam(RestrictAccess):
         else:
             raise BeamError(f"Could not beam '{self.archive}': Error [{response.status_code}] {response.text}")
 
-        return json.loads(response.text)
+        try:
+            json_response = json.loads(response.text)
+        except:
+            raise BeamError(
+                "\n-----------------------Response--------------------------\n"
+                + response.text
+                + "\n---------------------------------------------------------"
+                + f"\n\nInvalid {response.status_code} response to '{self.archive}' (see decoding error follow by raw response above)"
+            )
+
+        endpoint = os.path.join(os.path.dirname(host[:-1]), endpoint, "emit")
+        beam_id = json_response["id"]
+        for i, datum in enumerate(self.data):
+            datum.artifact.remote_path = os.path.join(endpoint, beam_id, str(i))
+
+        return json_response
 
     def initiate_firing_protocol(self, key):
         from requests_toolbelt.multipart.encoder import MultipartEncoder
@@ -156,6 +180,30 @@ class Beam(RestrictAccess):
         return open(self.archive, "rb")
 
 
+def aim(host, client_id, client_secret, username=None, password=None, aim_at_strangers=False):
+    import requests
+
+    data = {"client_id": client_id, "client_secret": client_secret}
+    if username:
+        data["username"] = username
+        data["password"] = password
+        data["grant_type"] = "password"
+    else:
+        data["grant_type"] = "client"
+
+    endpoint = os.path.join(host, "o", "token") + "/"
+    response = requests.post(endpoint, data=data, verify=not aim_at_strangers)
+    try:
+        return json.loads(response.text)["access_token"]
+    except:
+        raise BeamError(
+            "\n-----------------------Response--------------------------\n"
+            + response.text
+            + "\n---------------------------------------------------------"
+            + f"\n\nInvalid {response.status_code} authentication response (see decoding error follow by raw response above)"
+        )
+
+
 def thaw(file="artifacts.pickle", timeout=10):
     with portalocker.Lock(file, "rb+", timeout=timeout) as fh:
         pickles = pickle.load(fh)
@@ -185,4 +233,4 @@ def artificer(data, path=None, meta=None):
     with tarfile.open(p.parents[0] / (id + ".tar.gz"), "w:gz") as tar:
         tar.add(p, arcname=id)
     shutil.rmtree(p)
-    return Beam(str(p) + ".tar.gz")
+    return Beam(data, str(p) + ".tar.gz")
